@@ -1,4 +1,11 @@
-# VCS and editor
+# Override .gitignore: force-include the three data artifacts the Dockerfile
+# COPYs at build time. Negations come BEFORE later excludes so they stick.
+!data/
+!data/verses.parquet
+!data/verse_embeddings.npy
+!data/graph.json
+
+# VCS / editor / OS
 .git/
 .gitignore
 .gitattributes
@@ -7,7 +14,7 @@
 .claude/
 .DS_Store
 
-# Local secrets — Railway/Render set OPENAI_API_KEY via dashboard env vars.
+# Local secrets — set OPENAI_API_KEY in Railway dashboard, not here.
 .env
 .env.*
 !.env.example
@@ -19,7 +26,7 @@ __pycache__/
 .venv/
 venv/
 
-# Ingestion is one-off; the runtime image only needs to serve.
+# Ingestion + source corpus aren't needed at runtime.
 bible_ingest.py
 kjv.txt
 data/extractions/
