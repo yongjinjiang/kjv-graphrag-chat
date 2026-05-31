@@ -9,6 +9,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
+# curl for fetching the embeddings tarball at build time.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install Python dependencies first so this layer caches across code edits.
 COPY requirements.txt .
 RUN pip install -r requirements.txt
@@ -17,9 +22,14 @@ RUN pip install -r requirements.txt
 # via .dockerignore).
 COPY api.py bible_rag.py bible_graph.py ./
 
-# Pre-built artifacts. .dockerignore intentionally allows these even though
-# they're gitignored, so `railway up` / `docker build` bundle them.
-COPY data/verses.parquet data/verse_embeddings.npy data/graph.json ./data/
+# Small artifacts ship via the upload (railway up / local docker context).
+COPY data/verses.parquet data/graph.json ./data/
+
+# The 191 MB embeddings file is too large for Railway's snapshot init limit,
+# so we fetch it during the build from a GitHub Release attachment.
+ARG EMBEDDINGS_URL=https://github.com/yongjinjiang/kjv-graphrag-chat/releases/download/data-v1/verse_embeddings.npy
+RUN curl -fsSL "$EMBEDDINGS_URL" -o data/verse_embeddings.npy \
+    && ls -lh data/
 
 # Railway / Render / Fly set $PORT; default to 8000 for local docker run.
 ENV PORT=8000

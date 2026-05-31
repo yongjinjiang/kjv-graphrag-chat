@@ -3,8 +3,13 @@
 .env.*
 !.env.example
 
-# Generated artifacts (regenerate via bible_ingest.py)
-data/
+# Generated artifacts (regenerate via bible_ingest.py).
+# We commit the two small ones (parquet 2.5 MB + graph 17 MB) so Railway's
+# GitHub auto-deploy can build without them. The 191 MB embeddings file is
+# too big for git; it's fetched from a GitHub Release in the Dockerfile.
+data/*
+!data/verses.parquet
+!data/graph.json
 
 # Python
 __pycache__/
