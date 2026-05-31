@@ -6,11 +6,14 @@ Run locally:
 
 Endpoints:
     GET  /health
-    POST /query   body: {"question": str, "k": int=25}
+    POST /query         body: {"question": str, "k": int=25}  — full JSON
+    POST /query/stream  same body  — SSE: mode, citation, graph_context,
+                                     subgraph, token, done (or error)
 """
 
 from __future__ import annotations
 
+import json
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -24,6 +27,7 @@ if not os.environ.get("OPENAI_API_KEY") and os.environ.get("OPENAI_API"):
 import networkx as nx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from bible_rag import BibleRAG
@@ -103,4 +107,26 @@ def query(req: QueryRequest, request: Request) -> QueryResponse:
         ],
         graph_context=ans.graph_context,
         subgraph=sg_json,
+    )
+
+
+def _sse(event: str, payload: object) -> str:
+    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+@app.post("/query/stream")
+def query_stream(req: QueryRequest, request: Request) -> StreamingResponse:
+    rag: BibleRAG = request.app.state.rag
+
+    def event_gen():
+        try:
+            for event_name, payload in rag.answer_stream(req.question, k=req.k):
+                yield _sse(event_name, payload)
+        except Exception as exc:
+            yield _sse("error", {"detail": f"{type(exc).__name__}: {exc}"})
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

@@ -51,6 +51,52 @@ const MODE_COLORS: Record<string, string> = {
   hybrid: "bg-green-100 text-green-800",
 };
 
+type AssistantMsg = Extract<ChatMessage, { role: "assistant" }>;
+
+function handleSseEvent(
+  eventName: string,
+  data: unknown,
+  patch: (updater: (m: AssistantMsg) => AssistantMsg) => void,
+  setError: (msg: string) => void,
+) {
+  const d = data as Record<string, unknown>;
+  switch (eventName) {
+    case "mode":
+      patch((m) => ({ ...m, mode: String(d.mode ?? "") }));
+      break;
+    case "citation":
+      patch((m) => ({
+        ...m,
+        citations: [
+          ...m.citations,
+          {
+            ref: String(d.ref ?? ""),
+            text: String(d.text ?? ""),
+            verse_id: String(d.verse_id ?? ""),
+          },
+        ],
+      }));
+      break;
+    case "graph_context":
+      patch((m) => ({
+        ...m,
+        graph_context: [...m.graph_context, String(d.line ?? "")],
+      }));
+      break;
+    case "subgraph":
+      patch((m) => ({ ...m, subgraph: data as Subgraph }));
+      break;
+    case "token":
+      patch((m) => ({ ...m, content: m.content + String(d.chunk ?? "") }));
+      break;
+    case "error":
+      setError(String(d.detail ?? "Unknown stream error"));
+      break;
+    case "done":
+      break;
+  }
+}
+
 export default function Home() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -75,28 +121,73 @@ export default function Home() {
   async function send(question: string) {
     if (!question.trim() || loading) return;
     setError(null);
-    setMessages((m) => [...m, { role: "user", content: question }]);
     setInput("");
     setLoading(true);
+    // Push the user message and a blank assistant placeholder so the UI can
+    // patch the placeholder as SSE events arrive.
+    setMessages((m) => [
+      ...m,
+      { role: "user", content: question },
+      {
+        role: "assistant",
+        content: "",
+        mode: "",
+        citations: [],
+        graph_context: [],
+        subgraph: null,
+      },
+    ]);
+
+    const patch = (updater: (m: Extract<ChatMessage, { role: "assistant" }>) => Extract<ChatMessage, { role: "assistant" }>) => {
+      setMessages((current) => {
+        const last = current[current.length - 1];
+        if (last?.role !== "assistant") return current;
+        return [...current.slice(0, -1), updater(last)];
+      });
+    };
+
     try {
-      const res = await fetch(`${API_URL}/query`, {
+      const res = await fetch(`${API_URL}/query/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question, k: 25 }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
-      const data: QueryResponse = await res.json();
-      setMessages((m) => [
-        ...m,
-        {
-          role: "assistant",
-          content: data.answer,
-          mode: data.mode,
-          citations: data.citations,
-          graph_context: data.graph_context,
-          subgraph: data.subgraph ?? null,
-        },
-      ]);
+      if (!res.ok || !res.body) {
+        throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // SSE messages are separated by a blank line ("\n\n").
+        let sepIdx: number;
+        while ((sepIdx = buffer.indexOf("\n\n")) !== -1) {
+          const raw = buffer.slice(0, sepIdx);
+          buffer = buffer.slice(sepIdx + 2);
+          if (!raw.trim()) continue;
+
+          let eventName = "message";
+          let dataStr = "";
+          for (const line of raw.split("\n")) {
+            if (line.startsWith("event: ")) eventName = line.slice(7).trim();
+            else if (line.startsWith("data: ")) dataStr += line.slice(6);
+          }
+          if (!dataStr) continue;
+          let data: unknown;
+          try {
+            data = JSON.parse(dataStr);
+          } catch {
+            continue;
+          }
+          handleSseEvent(eventName, data, patch, setError);
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -145,7 +236,7 @@ export default function Home() {
                       : "bg-gray-100 text-gray-900"
                   }`}
                 >
-                  {m.role === "assistant" && (
+                  {m.role === "assistant" && m.mode && (
                     <div className="mb-1.5 flex items-center gap-2 text-xs">
                       <span
                         className={`px-2 py-0.5 rounded-full font-medium ${
@@ -154,24 +245,26 @@ export default function Home() {
                       >
                         {m.mode}
                       </span>
-                      <span className="text-gray-500">
-                        {m.citations.length} citation
-                        {m.citations.length === 1 ? "" : "s"}
-                      </span>
+                      {m.citations.length > 0 && (
+                        <span className="text-gray-500">
+                          {m.citations.length} citation
+                          {m.citations.length === 1 ? "" : "s"}
+                        </span>
+                      )}
                     </div>
                   )}
-                  {m.content}
+                  {m.role === "assistant" && !m.content ? (
+                    <span className="inline-flex items-center gap-1 text-gray-500">
+                      <span className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-pulse" />
+                      <span className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-pulse [animation-delay:120ms]" />
+                      <span className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-pulse [animation-delay:240ms]" />
+                    </span>
+                  ) : (
+                    m.content
+                  )}
                 </div>
               </div>
             ))}
-
-            {loading && (
-              <div className="flex justify-start">
-                <div className="bg-gray-100 text-gray-500 rounded-2xl px-4 py-2.5 text-sm">
-                  <span className="inline-block animate-pulse">Searching the graph…</span>
-                </div>
-              </div>
-            )}
 
             {error && (
               <div className="rounded-md border border-red-300 bg-red-50 text-red-800 px-3 py-2 text-sm">

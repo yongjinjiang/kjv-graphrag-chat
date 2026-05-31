@@ -23,7 +23,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable, Iterator
 
 import networkx as nx
 import numpy as np
@@ -282,6 +282,38 @@ Rules:
         )
         return ((resp.choices[0].message.content if resp.choices else "") or "")
 
+    def generate_answer_stream(
+        self,
+        question: str,
+        verses: list[Citation],
+        graph_context: list[str],
+        max_tokens: int = 600,
+    ) -> Iterator[str]:
+        verses_block = "\n".join(f"[{c.ref}] {c.text}" for c in verses) or "(no verses retrieved)"
+        ctx_block = "\n".join(f"- {line}" for line in graph_context) or "(none)"
+        user = (
+            f"Question: {question}\n\n"
+            f"Verses:\n{verses_block}\n\n"
+            f"Graph context:\n{ctx_block}"
+        )
+        stream = self.w.chat.completions.create(
+            model=ANSWER_MODEL,
+            messages=[
+                {"role": "system", "content": self._ANSWER_SYSTEM},
+                {"role": "user", "content": user},
+            ],
+            max_tokens=max_tokens,
+            temperature=0.2,
+            stream=True,
+        )
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            content = getattr(delta, "content", None) if delta else None
+            if content:
+                yield content
+
     # ---- top-level entry point ----
 
     def answer(self, question: str, k: int = 8) -> Answer:
@@ -306,6 +338,53 @@ Rules:
             graph_context=graph_ctx,
             debug={"intent": intent, "n_verses": len(cits)},
         )
+
+    def answer_stream(
+        self,
+        question: str,
+        k: int = 8,
+    ) -> Iterator[tuple[str, Any]]:
+        """Yield (event_name, payload) tuples so a transport (SSE, websocket,
+        whatever) can stream the answer to a client. Order is fixed:
+            mode → citation* → graph_context* → subgraph → token* → done.
+        On retrieval miss, a single fallback `token` event replaces the model
+        call so the client still gets a complete answer.
+        """
+        intent = self.classify(question)
+        yield ("mode", {"mode": intent.get("mode", "semantic")})
+
+        verse_ids, graph_ctx = self.retrieve(question, intent, k=k)
+
+        cits: list[Citation] = []
+        for v in verse_ids:
+            d = self.graph.nodes[v]
+            cits.append(Citation(ref=d.get("ref", v), text=d.get("text", ""), verse_id=v))
+
+        for c in cits:
+            yield ("citation", {"ref": c.ref, "text": c.text, "verse_id": c.verse_id})
+
+        for line in graph_ctx:
+            yield ("graph_context", {"line": line})
+
+        sg = bg.subgraph_for_verses(self.graph, verse_ids, extra_hops=1)
+        if sg.number_of_nodes() > 0:
+            sg_json = nx.node_link_data(sg, edges="links")
+        else:
+            sg_json = {"directed": True, "multigraph": True, "nodes": [], "links": []}
+        yield ("subgraph", sg_json)
+
+        if cits:
+            for chunk in self.generate_answer_stream(question, cits, graph_ctx):
+                yield ("token", {"chunk": chunk})
+        else:
+            yield ("token", {
+                "chunk": (
+                    "I couldn't find any verses to ground an answer to that question. "
+                    "Try rephrasing, or ask about a specific person, place, or theme."
+                ),
+            })
+
+        yield ("done", {})
 
 
 # ---------- helpers ----------
