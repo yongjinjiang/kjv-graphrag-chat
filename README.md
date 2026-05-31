@@ -22,12 +22,12 @@ a grounded answer with an interactive subgraph rendered in the browser.
 - **Streaming-first UX.** `POST /query/stream` returns a typed SSE
   stream (`mode → citation* → graph_context* → subgraph → token* → done`).
   The Next.js client patches the assistant bubble, sources panel, and
-  React Flow subgraph as events arrive — no library, just `fetch` +
+  Cytoscape subgraph as events arrive — no library, just `fetch` +
   `getReader`.
 - **End-to-end ownership.** Ingestion pipeline, routed retrieval,
-  FastAPI service, Next.js 16 / React 19 UI with React Flow + dagre
-  graph viz, and a Railway + Vercel production deployment that
-  redeploys on `git push`.
+  FastAPI service, Next.js 16 / React 19 UI with a Cytoscape.js +
+  fcose force-directed graph panel, and a Railway + Vercel production
+  deployment that redeploys on `git push`.
 
 ## Architecture
 
@@ -36,7 +36,7 @@ flowchart LR
     User((User))
 
     subgraph Vercel
-        UI["Next.js 16 + React 19<br/>React Flow + dagre"]
+        UI["Next.js 16 + React 19<br/>Cytoscape.js + fcose"]
     end
 
     subgraph Railway
@@ -134,7 +134,7 @@ else goes through `gpt-4o-mini` with `response_format={"type": "json_object"}`.
 
 | Layer | Stack |
 |---|---|
-| Frontend | Next.js 16 · React 19 · Tailwind 4 · @xyflow/react · @dagrejs/dagre |
+| Frontend | Next.js 16 · React 19 · Tailwind 4 · cytoscape · cytoscape-fcose |
 | Backend | FastAPI · uvicorn · pydantic · python-dotenv |
 | Retrieval | NumPy (cosine over 31,102 × 1,536-d embeddings) · NetworkX |
 | Models | OpenAI `text-embedding-3-small` · `gpt-4o-mini` · `gpt-4o` |
@@ -199,7 +199,7 @@ Both sides redeploy automatically on `git push`.
 ├── frontend/
 │   ├── app/page.tsx        chat UI, SSE consumer, tabbed Graph/Sources
 │   └── app/components/
-│       └── GraphPanel.tsx  React Flow + dagre layout
+│       └── GraphPanel.tsx  Cytoscape.js + fcose force-directed layout
 └── kjv.txt                 source corpus
 ```
 
@@ -227,7 +227,7 @@ Both sides redeploy automatically on `git push`.
 - **WebSocket transport** for multi-turn conversations with retrieval memory.
 - **pgvector** instead of in-memory NumPy, so the backend can run on
   Vercel Functions and drop the persistent Railway service.
-- **Click-through graph navigation**: clicking a node in the React Flow
+- **Click-through graph navigation**: clicking a node in the Cytoscape
   panel pivots the next chat turn to that entity.
 - **Eval harness**: golden Q/A pairs tracking retrieval recall and
   citation precision across model swaps.
