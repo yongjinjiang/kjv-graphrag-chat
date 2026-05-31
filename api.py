@@ -44,10 +44,13 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="BibleGraphRAG API", version="0.1.0", lifespan=lifespan)
 
-# Permissive CORS for local dev; restrict before production.
+# ALLOWED_ORIGINS is a comma-separated list, e.g.
+#   "https://biblegraphrag.vercel.app,https://biblegraphrag-git-main.vercel.app"
+# Defaults to "*" so `npm run dev` against a local backend Just Works.
+_origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_origins or ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )

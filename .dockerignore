@@ -1,0 +1,36 @@
+# VCS and editor
+.git/
+.gitignore
+.gitattributes
+.idea/
+.vscode/
+.claude/
+.DS_Store
+
+# Local secrets — Railway/Render set OPENAI_API_KEY via dashboard env vars.
+.env
+.env.*
+!.env.example
+
+# Python cruft
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Ingestion is one-off; the runtime image only needs to serve.
+bible_ingest.py
+kjv.txt
+data/extractions/
+
+# Streamlit prototype lives outside the API container.
+app.py
+
+# Next.js frontend deploys separately to Vercel.
+frontend/
+
+# Build/test cruft
+.pytest_cache/
+.mypy_cache/
+*.log
