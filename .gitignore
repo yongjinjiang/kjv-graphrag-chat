@@ -18,5 +18,14 @@ venv/
 .idea/
 .vscode/
 
+# Next.js / frontend
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.env.local
+frontend/.env.*.local
+!frontend/.env.local.example
+frontend/next-env.d.ts
+
 # Claude Code workspace metadata
 .claude/
