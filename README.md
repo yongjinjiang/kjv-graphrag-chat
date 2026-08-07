@@ -219,8 +219,15 @@ Both sides redeploy automatically on `git push`.
   exceeds GitHub's 100 MB per-file hard limit. Hosting it as a GitHub
   Release asset and fetching with `curl` in the Dockerfile is simpler
   than Git LFS and stays inside the free tier.
-- **CORS lockdown via env var.** `ALLOWED_ORIGINS` defaults to `*` for
-  local dev, comma-separated for prod.
+- **CORS fails closed.** `ALLOWED_ORIGINS` defaults to
+  `http://localhost:3000` (not `*`), comma-separated for prod. A
+  deployment that forgets to set it blocks browsers instead of opening
+  the API to every origin.
+- **Per-IP rate limiting.** `/query` and `/query/stream` are capped at
+  `QUERY_RATE_LIMIT` (default `10/minute`) via `slowapi`, since both hit
+  paid OpenAI calls and the API has no auth. Exception details are
+  logged server-side only — clients get a generic 500, not a stack
+  trace.
 
 ## Roadmap
 

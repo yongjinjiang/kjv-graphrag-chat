@@ -35,4 +35,7 @@ RUN curl -fsSL "$EMBEDDINGS_URL" -o data/verse_embeddings.npy \
 ENV PORT=8000
 EXPOSE 8000
 
-CMD ["sh", "-c", "uvicorn api:app --host 0.0.0.0 --port ${PORT}"]
+# --proxy-headers trusts X-Forwarded-For from Railway's edge proxy so the
+# per-IP rate limiter (slowapi, keyed on the client address) sees real
+# client IPs instead of bucketing every user under the proxy's IP.
+CMD ["sh", "-c", "uvicorn api:app --host 0.0.0.0 --port ${PORT} --proxy-headers --forwarded-allow-ips='*'"]

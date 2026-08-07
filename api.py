@@ -14,6 +14,7 @@ Endpoints:
 from __future__ import annotations
 
 import json
+import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -29,8 +30,14 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.util import get_remote_address
 
 from bible_rag import BibleRAG
+
+logger = logging.getLogger("bible_graph_rag.api")
 
 
 @asynccontextmanager
@@ -46,14 +53,30 @@ app = FastAPI(title="BibleGraphRAG API", version="0.1.0", lifespan=lifespan)
 
 # ALLOWED_ORIGINS is a comma-separated list, e.g.
 #   "https://biblegraphrag.vercel.app,https://biblegraphrag-git-main.vercel.app"
-# Defaults to "*" so `npm run dev` against a local backend Just Works.
-_origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
+# Defaults to the local Next.js dev origin — NOT "*" — so a deployment that
+# forgets to set this env var fails closed (blocks browsers) instead of
+# opening the API to every origin on the internet.
+_origins = [
+    o.strip()
+    for o in os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+    if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_origins or ["*"],
+    allow_origins=_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Per-IP rate limiting on the OpenAI-backed endpoints — /query and
+# /query/stream each cost real OpenAI spend, and the API has no auth, so an
+# unlimited public endpoint is an open invitation to run up the bill.
+# Override via QUERY_RATE_LIMIT, e.g. "30/minute".
+QUERY_RATE_LIMIT = os.environ.get("QUERY_RATE_LIMIT", "10/minute")
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 
 class QueryRequest(BaseModel):
@@ -88,12 +111,14 @@ def health(request: Request) -> dict:
 
 
 @app.post("/query", response_model=QueryResponse)
+@limiter.limit(QUERY_RATE_LIMIT)
 def query(req: QueryRequest, request: Request) -> QueryResponse:
     rag: BibleRAG = request.app.state.rag
     try:
         ans = rag.answer(req.question, k=req.k)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}")
+    except Exception:
+        logger.exception("/query failed for question=%r", req.question)
+        raise HTTPException(status_code=500, detail="Internal error while answering the question.")
 
     if ans.subgraph is not None and ans.subgraph.number_of_nodes() > 0:
         sg_json = nx.node_link_data(ans.subgraph, edges="links")
@@ -118,6 +143,7 @@ def _sse(event: str, payload: object) -> str:
 
 
 @app.post("/query/stream")
+@limiter.limit(QUERY_RATE_LIMIT)
 def query_stream(req: QueryRequest, request: Request) -> StreamingResponse:
     rag: BibleRAG = request.app.state.rag
 
@@ -125,8 +151,9 @@ def query_stream(req: QueryRequest, request: Request) -> StreamingResponse:
         try:
             for event_name, payload in rag.answer_stream(req.question, k=req.k):
                 yield _sse(event_name, payload)
-        except Exception as exc:
-            yield _sse("error", {"detail": f"{type(exc).__name__}: {exc}"})
+        except Exception:
+            logger.exception("/query/stream failed for question=%r", req.question)
+            yield _sse("error", {"detail": "Internal error while answering the question."})
 
     return StreamingResponse(
         event_gen(),
